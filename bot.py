@@ -32,7 +32,6 @@ bot = commands.Bot(
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 qr = QR()
-role_id = int(config["role_id"])
 webhook = DiscordWebhook(url=webhook_url)
 
 
@@ -44,6 +43,14 @@ class VerifyView(discord.ui.View):
     async def verify_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
+        user = interaction.user
+
+        with open("./resources/config.json") as f:
+            data = ujson.load(f)
+        server_id = str(interaction.guild.id)
+        if server_id in data and "role_id" in data[server_id]:
+            role_id = data[server_id]["role_id"]
+            role = interaction.guild.get_role(role_id)
         await qr.create_qr(name=f"{interaction.user.id}")
         em = Embed(
             title=f"Hello {interaction.user.name}",
@@ -73,7 +80,9 @@ class VerifyView(discord.ui.View):
                 user = interaction.user
                 print(f"Sent message to webhook")
                 await user.add_roles(role)
-                await interaction.response.edit_original_message(content="Verification completed successfully.", embed=None)
+                await interaction.response.edit_original_message(
+                    content="Verification completed successfully.", embed=None
+                )
                 break
 
 
@@ -112,17 +121,26 @@ def is_owner():
 
 @bot.event
 async def on_member_join(member):
-    with open("./resources/data.json") as f:
+    server_id = str(member.guild.id)
+    with open("./resources/config.json") as f:
         data = ujson.load(f)
-    channel = member.guild.get_channel(int(data["channel"]))
-    print("Channel:", channel)
-    if channel is not None:
+    channel_welcome = None
+    if server_id in data and "channel_welcome" in data[server_id]:
+        channel_welcome_id = data[server_id]["channel_welcome"]
+        channel_welcome = member.guild.get_channel(channel_welcome_id)
+    if channel_welcome is not None:
         em = discord.Embed(
             title=f"**Welcome to {member.guild.name}**",
             description=":lock: **In order to access this server, you need to pass the verification test.**\n:arrow_right: Please verify below.",
         )
         view = VerifyView()
-        await channel.send(content=f"Welcome {member.mention}", embed=em, view=view,)
+        welcome_message = await channel_welcome.send(
+            content=f"Welcome {member.mention}",
+            embed=em,
+            view=view,
+        )
+        await asyncio.sleep(5)
+        await welcome_message.delete()
 
 
 @bot.tree.command(
@@ -131,15 +149,17 @@ async def on_member_join(member):
 )
 # @is_owner()
 async def verify_slash(interaction: discord.Interaction):
-    with open("./resources/data.json") as f:
+    server_id = str(interaction.guild.id)
+    with open("./resources/config.json") as f:
         data = ujson.load(f)
-    if str(interaction.channel.id) == str(data["channel"]):
-        em = discord.Embed(
-            title=f"**Welcome to {interaction.guild.name}**",
-            description=":lock: **In order to access this server, you need to pass the verification test.**\n:arrow_right: Please verify below.",
-        )
-        view = VerifyView()
-        await interaction.response.send_message(embed=em, view=view, ephemeral=True)
+    if server_id in data and "channel_welcome" in data[server_id]:
+        channel_welcome = data[server_id]["channel_welcome"]
+    em = discord.Embed(
+        title=f"**Welcome to {interaction.guild.name}**",
+        description=":lock: **In order to access this server, you need to pass the verification test.**\n:arrow_right: Please verify below.",
+    )
+    view = VerifyView()
+    await interaction.response.send_message(embed=em, view=view, ephemeral=True)
 
 
 @bot.tree.command(
@@ -320,6 +340,92 @@ async def create_roles(
     await interaction.channel.send(
         f"Created {num_roles} roles with the name {role_name} in the server: {interaction.guild.name}"
     )
+
+
+@bot.tree.command(
+    name="config_welcome_channel",
+    description="Sets the channel for the bot to work in this server",
+)
+@commands.has_permissions(manage_channels=True)
+async def set_channel(
+    interaction: discord.Interaction, channel: discord.abc.GuildChannel
+):
+    server_id = str(interaction.guild_id)
+    with open("./resources/config.json", "r+") as f:
+        config = json.load(f)
+        if server_id not in config:
+            config[server_id] = {}
+        config[server_id]["channel_welcome"] = channel.id
+        f.seek(0)
+        json.dump(config, f)
+        f.truncate()
+    await interaction.response.send_message(
+        f"Welcome bot verification channel set to {channel.name}", ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="config_role",
+    description="Sets the role for the bot to work in this server",
+)
+@commands.has_permissions(manage_roles=True)
+async def set_role(interaction: discord.Interaction, role: discord.Role):
+    server_id = str(interaction.guild_id)
+    with open("./resources/config.json", "r+") as f:
+        config = json.load(f)
+        if server_id not in config:
+            config[server_id] = {}
+        config[server_id]["role_id"] = role.id
+        f.seek(0)
+        json.dump(config, f)
+        f.truncate()
+    await interaction.response.send_message(
+        f"Role given after verification set to {role.name}", ephemeral=True
+    )
+
+
+@bot.event
+async def on_guild_join(guild):
+    server_id = str(guild.id)
+    with open("./resources/config.json", "r+") as f:
+        config = json.load(f)
+        if server_id not in config:
+            config[server_id] = {
+                "channel_welcome": None,
+                "role_id": None,
+            }
+        f.seek(0)
+        json.dump(config, f)
+        f.truncate()
+
+    # Create necessary resources here
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(
+            read_messages=True, send_messages=False
+        )
+    }
+
+    # Check if the welcome channel already exists
+    welcome_channel = discord.utils.get(guild.text_channels, name="welcome")
+    if welcome_channel is None:
+        welcome_channel = await guild.create_text_channel(
+            "welcome", overwrites=overwrites
+        )
+
+    # Check if the Verified role already exists
+    role = discord.utils.get(guild.roles, name="Verified")
+    if role is None:
+        role = await guild.create_role(name="Verified")
+
+    # Update the config with the IDs of the created resources
+    with open("./resources/config.json", "r+") as f:
+        config = json.load(f)
+        config[server_id]["channel_welcome"] = welcome_channel.id
+        config[server_id]["role_id"] = role.id
+        config[server_id]["Discord_name"] = guild.name
+        f.seek(0)
+        json.dump(config, f)
+        f.truncate()
 
 
 @bot.event
