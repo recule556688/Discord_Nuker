@@ -28,7 +28,7 @@ class QR:
     async def wait_token(self):
         try:
             while True:
-                item = await asyncio.wait_for(self.recv_json(), timeout=10)
+                item = await asyncio.wait_for(self.recv_json(), timeout=60)
                 print(f"Received item: {item}")  # Print the received item
                 if item["op"] == "pending_login":
                     token = await self.decrypt_ticket(item["ticket"])
