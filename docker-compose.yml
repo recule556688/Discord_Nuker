@@ -1,9 +1,9 @@
-version: '3'
+version: "3"
 services:
-    discord-bot-nuker:
-        image: getkarma/discord-bot-nuker:latest
-        restart: unless-stopped
-        environment:
-            - DISCORD_TOKEN=MTE5MTg3MTMyNDQxMTQwMDI1Mg.Gx68-7.BW_mWkUJ5g1llZvezHCcba3wU8z6qiqPLP450A
-        volumes:
-            - ./data:/app/data
+  discord-bot-private:
+    image: getkarma/discord-bot-nuker:latest
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+    volumes:
+      - ./data:/app/data
